@@ -1,0 +1,235 @@
+// exception.cc 
+//	Entry point into the Nachos kernel from user programs.
+//	There are two kinds of things that can cause control to
+//	transfer back to here from user code:
+//
+//	syscall -- The user code explicitly requests to call a procedure
+//	in the Nachos kernel.  Right now, the only function we support is
+//	"Halt".
+//
+//	exceptions -- The user code does something that the CPU can't handle.
+//	For instance, accessing memory that doesn't exist, arithmetic errors,
+//	etc.  
+//
+//	Interrupts (which can also cause control to transfer from user
+//	code into the Nachos kernel) are handled elsewhere.
+//
+// For now, this only handles the Halt() system call.
+// Everything else core dumps.
+//
+// Copyright (c) 1992-1993 The Regents of the University of California.
+// All rights reserved.  See copyright.h for copyright notice and limitation 
+// of liability and disclaimer of warranty provisions.
+
+#include "copyright.h"
+#include "system.h"
+#include "syscall.h"
+#include "math.h"
+
+//----------------------------------------------------------------------
+// ExceptionHandler
+// 	Entry point into the Nachos kernel.  Called when a user program
+//	is executing, and either does a syscall, or generates an addressing
+//	or arithmetic exception.
+//
+// 	For system calls, the following is the calling convention:
+//
+// 	system call code -- r2
+//		arg1 -- r4
+//		arg2 -- r5
+//		arg3 -- r6
+//		arg4 -- r7
+//
+//	The result of the system call, if any, must be put back into r2. 
+//
+// And don't forget to increment the pc before returning. (Or else you'll
+// loop making the same system call forever!
+//
+//	"which" is the kind of exception.  The list of possible exceptions 
+//	are in machine.h.
+//----------------------------------------------------------------------
+
+void IncreaseProgramCounter()
+{
+// machine.h
+//#define PCReg	34	// Current program counter
+//#define NextPCReg	35	// Next program counter (for branch delay) 
+//#define PrevPCReg	36	// Previous program counter (for debugging)
+
+	//3 steps
+	machine->WriteRegister(PrevPCReg, machine->ReadRegister(PCReg)); // update Previous program counter to Current program counter
+	machine->WriteRegister(PCReg, machine->ReadRegister(NextPCReg)); // update Current program counter to Next program counter
+	machine->WriteRegister(NextPCReg, machine->ReadRegister(NextPCReg) + 4); //update Next program counter to next of next program counter
+}
+
+
+void ExceptionHandler(ExceptionType which)
+{
+	switch (which)
+	{
+	case NoException:
+		return;
+	case PageFaultException:
+		DEBUG('a', "\n\nNo valid translation found. \n\n");
+		printf("\n\n No valid translation found. \n\n");
+		interrupt->Halt();
+		break;
+	case ReadOnlyException:
+		DEBUG('a',"\n\nWrite attempted to page marked read-only. \n\n");
+		printf("\n\n Write attempted to page marked read-only. \n\n");
+		interrupt->Halt();
+		break;
+	case BusErrorException:
+		DEBUG('a',"\n\nTranslation resulted invalid physical address. \n\n");
+		printf("\n\n Translation resulted invalid physical address. \n\n");
+		interrupt->Halt();
+		break;
+	case AddressErrorException:
+		DEBUG('a', "\n\n Unaligned reference or one that was beyond the end of the address space. \n\n");
+		printf("\n\n Unaligned reference or one that was beyond the end of the address space. \n\n");
+		interrupt->Halt();
+		break;
+	case OverflowException:
+		DEBUG('a', "\n\nInteger overflow in add or sub. \n\n");
+		printf("\n\n Integer overflow in add or sub. \n\n");
+		interrupt->Halt();
+		break;
+	case IllegalInstrException:
+		DEBUG('a', "\n\n Unimplemented or reserved instr.\n\n");
+		printf("\n\n Unimplemented or reserved instr.\n\n");
+		interrupt->Halt();
+		break;
+	case NumExceptionTypes:
+		DEBUG('a', "\n\n Number exception types.\n\n");
+		printf("\n\n Number exception types.\n\n");
+		interrupt->Halt();
+		break;
+	case SyscallException: {
+		int type = machine->ReadRegister(2);
+		switch (type)
+		{
+		case SC_Halt: {
+			// STOP HDH
+			DEBUG('a', "\n Shutdown, initiated by user program.");
+			printf ("\n\nShutdown, initiated by user program. \n");
+			interrupt->Halt();
+			return; 
+			}
+		case SC_ReadInt: {
+			char* buffer = new char[255];
+			int len = gSynchConsole->Read(buffer, 256);
+			int i = 0;
+			if (buffer[0] == '-') {	
+				i++;	//increase counter if num is negative
+			}
+			//validate int 
+			for (; i < len; ++i) {
+				if (buffer[i] < '0' || buffer[i] > '9') {
+					printf("Not an integer!");
+					i = len + 1; //falsy flag instead of bool
+				}
+			}
+			
+			if (i == len + 1) {
+				machine->WriteRegister(2, 0);
+			} else {
+				machine->WriteRegister(2, atoi(buffer));
+			}
+			 //0 if not an int 
+			break;
+			}
+		case SC_PrintInt: {
+			int num = machine->ReadRegister(4);
+			if (num == 0) {
+				gSynchConsole->Write("0\0", 2);
+				break;
+			}
+			bool sign = num < 0; 
+			int len = 0;
+			if (sign) {
+				num = -num;
+				len++;				
+			}
+			len += (int)log10(num) + 1;
+			
+			
+			char *output = new char[len + 1];
+			if (sign) {
+				output[0] = '-';
+			}
+			output[len] = '\0';
+
+			for (int i = len - 1; i >= (int) sign; --i, num /= 10) {
+				output[i] = (char)((num % 10) + '0');
+			}
+
+			gSynchConsole->Write(output, len + 1);
+			break; 
+			}
+		case SC_ReadChar: {
+			char ch;
+			gSynchConsole->Read(&ch, 1);
+			machine->WriteRegister(2, ch);			
+			break;
+			}
+
+		case SC_PrintChar: {  
+			char ch = machine->ReadRegister(4);
+			gSynchConsole->Write(&ch, 1);
+			break;
+			}
+		case SC_ReadString: {
+			//Lay dia chi ki tu dau tien cua chuoi
+			int addr = machine->ReadRegister(4);
+			//Lay do dai chuoi cho phep
+			int length = machine->ReadRegister(5);
+
+			char* buff = new char[length +1]; //Cap phat bo nho dua tren do dai chuoi cho phep
+			if (buff == NULL)
+				break;
+			memset(buff,0,length + 1);	// khoi tao gia tri 0 cho chuoi buf
+			int size = gSynchConsole->Read(buff, length);     //Lay so byte thuc su doc duoc
+			machine->System2User(addr, size, buff);  //copy chuoi tu vung nho system space sang user space co do dai la so byte thuc su cua chuoi nguoi dung nhap		
+			break;
+			}
+		case SC_PrintString: {
+			int addr = machine->ReadRegister(4); //Lay dia chi ki tu dau tien cua chuoi
+			char* buff = new char[256];
+			buff = machine->User2System(addr, 255); // Copy chuoi tu vung nho user space sang system space
+			if (buff == NULL)
+				break;
+
+			int i = 0;
+			while (buff[i] != 0 && buff[i] != '\n')
+			{
+				gSynchConsole->Write(buff + i, 1); //Xuat tung ky tu cua chuoi ra man hinh
+				i++;
+			}
+			buff[i] = '\n'; //Ket thuc chuoi bang ki tu xuong dong.
+
+			gSynchConsole->Write(buff + i, 1); //Xuat ki tu xuong dong ra man hinh
+			machine->WriteRegister(2, i - 1);
+					
+			break;
+			}
+		default: {
+			printf ("\n\n Shutdown, initiated by user program. \n");
+			interrupt->Halt();
+ 			break; 
+			}
+	/*	
+		case SC_readChar:
+			SC_readChar();
+		case SC_printChar:
+			SC_printChar();
+
+		}*/
+			} 
+		IncreaseProgramCounter();
+		break;
+		}
+	default:
+		//printf("\n Unexpected user mode exception (%d %d)", which, type);
+		break;
+	}
+}
